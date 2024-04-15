@@ -41,6 +41,19 @@ class AgFactory{
             $cmd);
     }
 
+    public static function getInventorySlots(String $conx, InvMenu $inv): string{
+        if(str_contains($conx, "%")){
+            $exp = explode("%", $conx);
+            $resort = [];
+            foreach($exp as $val) if(is_numeric($val)) $resort["%".$val."%"] = SI::getInstance()->lookupAliases($inv->getInventory()->getItem($val))[0];
+            return str_replace(
+                array_keys($resort),
+                array_values($resort),
+            $conx);
+        }
+        return $conx;
+    }
+
     public static function getDataStatic(String $conx): ?String{
         if(str_contains($conx, "[") && str_contains($conx, "]")){
             return str_replace(

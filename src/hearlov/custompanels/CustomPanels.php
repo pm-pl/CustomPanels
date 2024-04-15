@@ -2,21 +2,25 @@
 
 namespace hearlov\custompanels;
 
-use hearlov\custompanels\cmd\reload;
-use hearlov\custompanels\{utils\CommandUtil as CU, utils\MoneyUtil as MU, manager\AgFactory as AF, manager\OpenPanel, manager\InventoryDataManager};
+use hearlov\custompanels\cmd\{reload, cp};
+use hearlov\custompanels\{utils\CommandUtil as CU,
+    utils\MoneyUtil as MU,
+    manager\AgFactory as AF,
+    manager\OpenPanel,
+    manager\InventoryDataManager,
+    utils\MoneyUtil};
 use pocketmine\{command\CommandSender,
     console\ConsoleCommandSender,
-    inventory\SimpleInventory,
     item\Item,
     item\StringToItemParser,
-    item\VanillaItems,
     player\Player,
     plugin\PluginBase,
     scheduler\ClosureTask,
     utils\Config,
     world\Position};
 
-use hearlov\custompanels\libs\muqsit\invmenu\{transaction\InvMenuTransactionResult, InvMenu, InvMenuHandler, transaction\InvMenuTransaction, type\InvMenuTypeIds};
+use hearlov\custompanels\libs\muqsit\invmenu\{InvMenu, InvMenuHandler};
+use hearlov\custompanels\panel\{CustomPanel, Panels};
 
 
 Class CustomPanels extends PluginBase{
@@ -25,9 +29,6 @@ Class CustomPanels extends PluginBase{
 
 	//Config
 	private $config;
-
-    //Setup
-    private $panels;
     private $commands = [];
     private $usedata = true;
 
@@ -39,6 +40,7 @@ Class CustomPanels extends PluginBase{
         }
         $this->saveDefaultConfig();
 		$this->config = new Config($this->getDataFolder() . "config.yml", Config::YAML);
+        Panels::setup($this);
         $this->reloadState(1);
         $this->usedata = $this->config->get("use-datas") ?? true;
 
@@ -58,18 +60,6 @@ Class CustomPanels extends PluginBase{
 	public static function getInstance(): CustomPanels {
 		return self::$instance;
 	}
-
-    public function getPanels(): array{
-        return $this->panels;
-    }
-
-    /**
-     * @param String $panelname
-     * @return array|null
-     */
-    public function getPanel(String $panelname): ?array{
-        return $this->panels[$panelname] ?? null;
-    }
 	
 	public function getConfig(): Config{
 		return $this->config;
@@ -79,6 +69,7 @@ Class CustomPanels extends PluginBase{
 
     public function sendCommandInItem(Player $player, Item $item, String $cmd, InvMenu &$inv): void{
         $cmd = AF::TextGenerate($this->getServer(), $player, $item, $cmd, $inv);
+        $cmd = AF::getInventorySlots($cmd, $inv);
         if($this->usedata) $cmd = AF::getDataStatic($cmd);
         if(str_starts_with($cmd, "cmd=")){
             $command = substr($cmd, 4);
@@ -110,7 +101,7 @@ Class CustomPanels extends PluginBase{
             $player->teleport(new Position($pos[0], $pos[1], $pos[2], isset($pos[3]) ? $this->getServer()->getWorldManager()->getWorldByName($pos[3]) : null));
         }elseif(str_starts_with($cmd, "open=")){
             $command = substr($cmd, 5);
-            if($this->getPanel($command) === null) return;
+            if(Panels::getPanel($command) === null) return;
             $this->sendCommandInItem($player, $item, "rca=custompanels:$command", $inv);
         }elseif(str_starts_with($cmd, "give=")){
             $command = substr($cmd, 5);
@@ -134,6 +125,42 @@ Class CustomPanels extends PluginBase{
             if(count(explode(" ", $command)) < 1) return;
             $spc = ["exp" => explode(" ", $command)[0], "cont" => substr($command, strlen(explode(" ", $command)[0]) + 1)];
             InventoryDataManager::setData($spc["exp"], $spc["cont"]);
+        }elseif(str_starts_with($cmd, "buy=")){
+            $command = substr($cmd, 4);
+            if(count(explode(" ", $command)) < 3) return;
+            $exp = explode(" ", $command);
+            $item = StringToItemParser::getInstance()->parse($exp[0]);
+            if(!(is_numeric($exp[2]) && is_numeric($exp[1]) && $item instanceof Item)) return;
+            if(!MoneyUtil::buyItem($player,$exp[2] * 1) && !$player->getInventory()->canAddItem($item->setCount($exp[1]))) return;
+            $player->getInventory()->addItem($item->setCount($exp[1]));
+        }elseif(str_starts_with($cmd, "buycmd=")){
+            $command = substr($cmd, 7);
+            $exp = explode(" ", $command);
+            if(count($exp) < 2) return;
+            if(!is_numeric($exp[0])) return;
+            if(!MoneyUtil::buyItem($player,$exp[0] * 1)) return;
+            $command = substr($command, strlen($exp[0]) + 1);
+            $this->sendCommandInItem($player, $item, $command, $inv);
+        }elseif(str_starts_with($cmd, "sell=")){
+            $command = substr($cmd, 5);
+            $exp = explode(" ", $command);
+            $item = StringToItemParser::getInstance()->parse($exp[0]);
+            if(!(is_numeric($exp[2]) && is_numeric($exp[1]) && $item instanceof Item)) return;
+            $item->setCount($exp[1]);
+            if(!MoneyUtil::sellItem($player,$exp[2] * 1, $item)) return;
+            $player->getInventory()->removeItem($item);
+        }elseif(str_starts_with($cmd, "sellcmd=")){
+            $command = substr($cmd, 8);
+            $exp = explode(" ", $command);
+            if (count($exp) < 3) return;
+            if(!is_numeric($exp[1])) return;
+            $item = StringToItemParser::getInstance()->parse($exp[0]);
+            $item->setCount($exp[1] * 1);
+            if(!$item instanceof Item) return;
+            if(!$player->getInventory()->contains($item)) return;
+            $player->getInventory()->removeItem($item);
+            $command = substr($command, strlen($exp[0]) + strlen($exp[1]) + 2);
+            $this->sendCommandInItem($player, $item, $command, $inv);
         }
 
     }
@@ -141,8 +168,8 @@ Class CustomPanels extends PluginBase{
     //STATE
 
     public function reloadState(int $state, CommandSender $sender = null){
-        $this->panels = [];
         if($state == 0) $this->delCommands();
+        Panels::reload();
         $files = glob($this->getDataFolder() . '*.yml', GLOB_ERR);
         foreach($files as $file) {
             if(str_ends_with($file, "config.yml") || str_ends_with($file, "datas.yml")) continue;
@@ -152,38 +179,23 @@ Class CustomPanels extends PluginBase{
             if(!is_array($data["items"])) continue;
             //A
             if($sender !== null) $sender->sendMessage("§6".$data["command"] . " §3panel is activating...");
-            $size = $data["type"] == "DOUBLE_CHEST" ? 54 : 27;
 
-            $arr = [];
-            $inv = new SimpleInventory($size);
-            if(isset($data["empty"])){
-                $item = StringToItemParser::getInstance()->parse($data["empty"]) ?? VanillaItems::AIR();
-                for($i = 0; $i < $size; $i++){
-                    $inv->setItem($i, $item);
-                }
-            }
-            foreach($data["items"] as $index => $item){
-                if(!is_numeric($index)) continue;
-                $itm = StringToItemParser::getInstance()->parse($item["meta"] ?? "air");
-                if($itm === null) continue;
-                if($itm->getVanillaName() == "Air"){
-                    $inv->clear($index);
-                }else{
-                    $itm->setCustomName($item["name"] ?? "");
-                    $inv->setItem($index, $itm->setCount($item["count"] ?? 1));
-                }
-                $arr["commands"][$index] = $item["commands"] ?? [];
-                $arr["readonly"][$index] = $item["readonly"] ?? true; //Default in True
-            }
-            $arr["inventory"] = $inv;
-            $arr["readonly"]["general"] = $data["readonly"] ?? true; //Default in True
-            $arr["description"] = $data["description"] ?? "";
-            if(isset($data["panel-open-commands"])) $arr["opencmd"] = $data["panel-open-commands"];
-            if(isset($data["panel-close-commands"])) $arr["closecmd"] = $data["panel-close-commands"];
-            $arr["permission"] = $data["permission"] ?? "custompanels.openpanels";
-            $this->panels[$data["command"]] = $arr;
-            $this->panels[$data["command"]]["name"] = $data["name"];
-            if($sender !== null) $sender->sendMessage("§6".$data["command"] . " §3panel is loaded and has size §3" . count($arr["commands"]) . " §3Command has been loaded to §6$size §3item.");
+                $name = $data["name"];
+                $command = $data["command"];
+                $type = $data["type"];
+                $invarg = $data["items"];
+                $desc = $data["description"] ?? "";
+                $ro = $data["readonly"] ?? true;
+                $perm = $data["permission"] ?? "custompanels.openpanels";
+                $pcmd = [];
+                if(isset($data["panel-open-commands"])) $pcmd["open"] = $data["panel-open-commands"];
+                if(isset($data["panel-close-commands"])) $pcmd["close"] = $data["panel-close-commands"];
+                $empty = $data["empty"] ?? "";
+
+                $panel = new CustomPanel($name, $type, $command, $perm, $desc, $ro, $pcmd, $empty, $invarg);
+                Panels::register($panel);
+
+            if($sender !== null) $sender->sendMessage("§6".$data["command"] . " §3panel is loaded and has size §3" . count($invarg) . " §3Item has been loaded.");
             //A
         }
         if($sender !== null) $sender->sendMessage("§aPanel Readers processed. Menus are active\n");
@@ -198,7 +210,6 @@ Class CustomPanels extends PluginBase{
     }
 
     private function delCommands(): void{
-        //$this->getLogger()->alert("Panel Commands Removing...");
         foreach($this->commands as $command){
             $this->getServer()->getCommandMap()->unregister($command);
         }
@@ -211,10 +222,11 @@ Class CustomPanels extends PluginBase{
         if($state == 1){
             $commands = [
                 new reload($this),
+                new cp($this)
             ];
         }
-        foreach($this->panels as $key => $arr){
-            $command = new CU($this, $key, $arr["description"], $arr["permission"]);
+        foreach(Panels::getPanels() as $panel){
+            $command = new CU($this, $panel->command, $panel->description, $panel->permission);
             $commands[] = $command;
             $this->commands[] = $command;
         }
