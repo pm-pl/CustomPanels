@@ -9,7 +9,8 @@ use hearlov\custompanels\{utils\CommandUtil as CU,
     manager\OpenPanel,
     manager\InventoryDataManager,
     utils\MoneyUtil};
-use pocketmine\{command\CommandSender,
+use pocketmine\{command\Command,
+    command\CommandSender,
     console\ConsoleCommandSender,
     item\Item,
     item\StringToItemParser,
@@ -28,11 +29,11 @@ Class CustomPanels extends PluginBase{
     public const PREFIX = "§7[§6CP§7]";
 
 	//Config
-	private $config;
-    private $commands = [];
-    private $usedata = true;
+	private Config $config;
+    private array $commands = [];
+    private bool $usedata = true;
 
-	private static $instance = null;
+	private static ?CustomPanels $instance = null;
 
 	public function onEnable(): void{
         if(!file_exists($this->getDataFolder() . "config.yml")){
